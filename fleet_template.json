@@ -1,0 +1,60 @@
+{
+  "Parameters": {
+    "SerialNumber": {
+      "Type": "String"
+    },
+    "CertificateId": {
+      "Type": "String"
+    }
+  },
+  "Resources": {
+    "certificate": {
+      "Type": "AWS::IoT::Certificate",
+      "Properties": {
+        "CertificateId": { "Ref": "CertificateId" },
+        "Status": "ACTIVE"
+      }
+    },
+    "thing": {
+      "Type": "AWS::IoT::Thing",
+      "Properties": {
+        "ThingName": { "Ref": "SerialNumber" }
+      }
+    },
+    "fleetPolicy": {
+      "Type": "AWS::IoT::Policy",
+      "Properties": {
+        "PolicyName": "${SerialNumber}-fleet-policy",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "iot:Connect",
+                "iot:Publish",
+                "iot:Subscribe",
+                "iot:Receive"
+              ],
+              "Resource": "*"
+            }
+          ]
+        }
+      }
+    },
+    "attachPolicy": {
+      "Type": "AWS::IoT::PolicyPrincipalAttachment",
+      "Properties": {
+        "PolicyName": { "Ref": "fleetPolicy" },
+        "Principal": { "Ref": "certificate" }
+      }
+    },
+    "attachThing": {
+      "Type": "AWS::IoT::ThingPrincipalAttachment",
+      "Properties": {
+        "ThingName": { "Ref": "thing" },
+        "Principal": { "Ref": "certificate" }
+      }
+    }
+  }
+}
