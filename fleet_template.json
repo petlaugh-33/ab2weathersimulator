@@ -15,7 +15,7 @@
         "Status":        "ACTIVE"
       }
     },
-    "fleetPolicy": {
+    "policy": {
       "Type": "AWS::IoT::Policy",
       "Properties": {
         "PolicyName": { "Fn::Sub": "${SerialNumber}-fleet-policy" },
@@ -36,20 +36,20 @@
         }
       }
     },
-    "attachPolicy": {
-      "Type": "AWS::IoT::PolicyPrincipalAttachment",
-      "Properties": {
-        "PolicyName":  { "Ref": "fleetPolicy" },
-        "Principal":   { "Ref": "certificate" }
-      }
-    },
     "thing": {
       "Type": "AWS::IoT::Thing",
       "Properties": {
         "ThingName": { "Ref": "SerialNumber" }
       }
     },
-    "attachThing": {
+    "policyPrincipalAttachment": {
+      "Type": "AWS::IoT::PolicyPrincipalAttachment",
+      "Properties": {
+        "PolicyName": { "Ref": "policy" },
+        "Principal":  { "Ref": "certificate" }
+      }
+    },
+    "thingPrincipalAttachment": {
       "Type": "AWS::IoT::ThingPrincipalAttachment",
       "Properties": {
         "ThingName": { "Ref": "thing" },
@@ -58,4 +58,3 @@
     }
   }
 }
-
