@@ -8,9 +8,10 @@ EXISTING=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
   http://169.254.169.254/latest/meta-data/tags/instance/StateCode || true)
 if [[ -z "$EXISTING" ]]; then
   # Download states list from GitHub
-  STATES_JSON=$(curl -s https://raw.githubusercontent.com/your-org/ab2weathersimulator/main/states.json)
-  # Pick a random state
-  STATE=$(echo "$STATES_JSON" | jq -r '.states | .[ (now|floor % length) ]')
+  STATES_JSON=$(curl -s https://raw.githubusercontent.com/petlaugh-33/ab2weathersimulator/main/states.json)
+  # Pick a “random” state based on time
+  INDEX=$(( $(date +%s) % $(echo "$STATES_JSON" | jq '.states | length') ))
+  STATE=$(echo "$STATES_JSON" | jq -r ".states[$INDEX]")
   INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
     http://169.254.169.254/latest/meta-data/instance-id)
   aws ec2 create-tags \
@@ -38,12 +39,16 @@ aws s3 cp "s3://my-iot-claim-certs/private.pem.key" \
 chmod 644 "$CERT_DIR"/*
 
 # 3) Python dependencies
-pip3 install --no-cache-dir paho-mqtt requests
+pip3 install --no-cache-dir paho-mqtt requests jq
 
-# 4) Write publisher script
+# 4) Persist STATE for publisher
+echo "$STATE" > /opt/STATE_CODE
+
+# 5) Write publisher script
 cat << 'PYTHON' > /opt/paho_publisher.py
 #!/usr/bin/env python3
 import ssl, time, json, random
+
 from paho.mqtt import client as mqtt
 
 # Read STATE from file
@@ -57,10 +62,12 @@ CERT    = '/etc/iot-device/deviceCert.crt'
 KEY     = '/etc/iot-device/devicePrivateKey.key'
 
 client = mqtt.Client(client_id=f'weather-monitor-{STATE}')
-client.tls_set(ca_certs=ROOT_CA,
-               certfile=CERT,
-               keyfile=KEY,
-               tls_version=ssl.PROTOCOL_TLSv1_2)
+client.tls_set(
+    ca_certs=ROOT_CA,
+    certfile=CERT,
+    keyfile=KEY,
+    tls_version=ssl.PROTOCOL_TLSv1_2
+)
 client.connect(ENDPOINT, port=8883)
 client.loop_start()
 
@@ -81,11 +88,9 @@ except KeyboardInterrupt:
     client.disconnect()
 PYTHON
 
-# Persist STATE for publisher
-echo "$STATE" > /opt/STATE_CODE
 chmod +x /opt/paho_publisher.py
 
-# 5) Systemd service & log setup
+# 6) Setup log file and systemd service
 LOG=/var/log/paho-weather.log
 touch "$LOG"
 chown ec2-user:ec2-user "$LOG"
@@ -109,3 +114,4 @@ UNIT
 systemctl daemon-reload
 systemctl enable paho-weather.service
 systemctl start  paho-weather.service
+
