@@ -1,33 +1,38 @@
 #!/bin/bash
 set -euo pipefail
 
-# --- 0) Auto-assign StateCode tag if not set ---
+# --- 0) Auto-assign StateCode & Name tags if not already set ---
 TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
   -H "X-aws-ec2-metadata-token-ttl-seconds:21600")
 EXISTING=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
   http://169.254.169.254/latest/meta-data/tags/instance/StateCode || true)
+
 if [[ -z "$EXISTING" ]]; then
-  # Download states list from GitHub
+  # Pull state list from GitHub
   STATES_JSON=$(curl -s https://raw.githubusercontent.com/petlaugh-33/ab2weathersimulator/main/states.json)
-  # Pick a “random” state based on time
-  INDEX=$(( $(date +%s) % $(echo "$STATES_JSON" | jq '.states | length') ))
+  # Compute index = current seconds mod number of states
+  LEN=$(echo "$STATES_JSON" | jq '.states | length')
+  INDEX=$(( $(date +%s) % LEN ))
   STATE=$(echo "$STATES_JSON" | jq -r ".states[$INDEX]")
   INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
     http://169.254.169.254/latest/meta-data/instance-id)
+
+  # Tag both StateCode and Name
   aws ec2 create-tags \
     --resources "$INSTANCE_ID" \
-    --tags Key=StateCode,Value="$STATE" Key=Name,Value="weather-monitor-$STATE"
+    --tags Key=StateCode,Value="$STATE" \
+           Key=Name,Value="weather-monitor-$STATE"
 else
   STATE="$EXISTING"
 fi
 
 echo "Assigned StateCode: $STATE" > /var/log/state-assignment.log
 
-# 1) System update & packages
+# 1) System update & install packages
 yum update -y
 yum install -y git python3 python3-pip jq aws-cli
 
-# 2) Fetch certificates & CA from S3
+# 2) Fetch certificates & Root CA from S3
 CERT_DIR=/etc/iot-device
 mkdir -p "$CERT_DIR"
 aws s3 cp "s3://my-iot-claim-certs/AmazonRootCA1 (1).pem" \
@@ -38,28 +43,28 @@ aws s3 cp "s3://my-iot-claim-certs/private.pem.key" \
     "$CERT_DIR/devicePrivateKey.key"
 chmod 644 "$CERT_DIR"/*
 
-# 3) Python dependencies
+# 3) Install Python dependencies
 pip3 install --no-cache-dir paho-mqtt requests jq
 
-# 4) Persist STATE for publisher
+# 4) Persist STATE for the publisher
 echo "$STATE" > /opt/STATE_CODE
 
-# 5) Write publisher script
+# 5) Write the Paho publisher script
 cat << 'PYTHON' > /opt/paho_publisher.py
 #!/usr/bin/env python3
 import ssl, time, json, random
 
 from paho.mqtt import client as mqtt
 
-# Read STATE from file
+# Read assigned STATE
 with open('/opt/STATE_CODE') as f:
     STATE = f.read().strip()
 
 ENDPOINT = 'a3qn7c7brkka54-ats.iot.us-east-1.amazonaws.com'
 TOPIC    = f'weather/{STATE}'
-ROOT_CA = '/etc/iot-device/rootCA.pem'
-CERT    = '/etc/iot-device/deviceCert.crt'
-KEY     = '/etc/iot-device/devicePrivateKey.key'
+ROOT_CA  = '/etc/iot-device/rootCA.pem'
+CERT     = '/etc/iot-device/deviceCert.crt'
+KEY      = '/etc/iot-device/devicePrivateKey.key'
 
 client = mqtt.Client(client_id=f'weather-monitor-{STATE}')
 client.tls_set(
@@ -77,7 +82,7 @@ try:
             'state': STATE,
             'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             'temperature': round(random.uniform(30,100),1),
-            'humidity':    round(random.uniform(10,90),1)
+            'humidity': round(random.uniform(10,90),1)
         }
         msg = json.dumps(payload)
         print(msg, flush=True)
@@ -90,7 +95,7 @@ PYTHON
 
 chmod +x /opt/paho_publisher.py
 
-# 6) Setup log file and systemd service
+# 6) Setup logging and a systemd service
 LOG=/var/log/paho-weather.log
 touch "$LOG"
 chown ec2-user:ec2-user "$LOG"
@@ -111,7 +116,7 @@ RestartSec=10
 WantedBy=multi-user.target
 UNIT
 
+# 7) Enable and start the publisher on boot
 systemctl daemon-reload
 systemctl enable paho-weather.service
 systemctl start  paho-weather.service
-
