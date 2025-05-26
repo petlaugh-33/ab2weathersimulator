@@ -8,7 +8,7 @@ TOPIC      = f"{os.getenv('TOPIC_PREFIX')}/{STATE}"
 CERT_FILE  = '/etc/iot-device/cert.pem'
 KEY_FILE   = '/etc/iot-device/priv.key'
 ROOT_CA    = '/etc/ssl/certs/ca-bundle.crt'
-CLIENT_ID  = f'weather-monitor-{STATE}'
+CLIENT_ID  = f'weather_monitor_{STATE}'   
 
 client = mqtt.Client(client_id=CLIENT_ID)
 client.tls_set(ROOT_CA, certfile=CERT_FILE, keyfile=KEY_FILE,
