@@ -16,18 +16,23 @@ def on_connect(client, userdata, flags, rc):
     # Subscribe to jobs topics
     client.subscribe(f"$aws/things/{CLIENT_ID}/jobs/notify-next")
     client.subscribe(f"$aws/things/{CLIENT_ID}/jobs/+/get/accepted")
+    # Request the next pending job
+    client.publish(f"$aws/things/{CLIENT_ID}/jobs/$next/get", "")
 
 def on_message(client, userdata, msg):
     print(f"Received message on topic {msg.topic}", flush=True)
+    print(f"Message payload: {msg.payload}", flush=True)
     if 'notify-next' in msg.topic:
         payload = json.loads(msg.payload)
         if 'execution' in payload:
             job_id = payload['execution']['jobId']
+            print(f"Requesting job document for job_id: {job_id}", flush=True)
             client.publish(f"$aws/things/{CLIENT_ID}/jobs/{job_id}/get", "")
     elif '/get/accepted' in msg.topic:
-        handle_job(json.loads(msg.payload))
+        print("Received job document, handling job", flush=True)
+        handle_job(client, json.loads(msg.payload))
 
-def handle_job(job_doc):
+def handle_job(client, job_doc):
     job_id = job_doc['execution']['jobId']
     job = job_doc['execution']['jobDocument']
     
@@ -67,14 +72,32 @@ client.tls_set(ROOT_CA, certfile=CERT_FILE, keyfile=KEY_FILE,
                tls_version=ssl.PROTOCOL_TLSv1_2)
 
 print("Connecting to", ENDPOINT, "as", CLIENT_ID, flush=True)
-rc = client.connect(ENDPOINT, 8883)
-print("connect rc =", rc, flush=True)          # 0 = success
-if rc:
-    raise SystemExit("MQTT CONNECT failed")
+
+while True:
+    try:
+        rc = client.connect(ENDPOINT, 8883, keepalive=60)
+        if rc == 0:
+            break
+        else:
+            print(f"Connection failed with result code {rc}. Retrying in 5 seconds...", flush=True)
+            time.sleep(5)
+    except Exception as e:
+        print(f"Connection attempt failed: {e}. Retrying in 5 seconds...", flush=True)
+        time.sleep(5)
 
 client.loop_start()
+
 try:
     while True:
+        if not client.is_connected():
+            print("Disconnected. Attempting to reconnect...", flush=True)
+            try:
+                client.reconnect()
+            except Exception as e:
+                print(f"Reconnection failed: {e}. Retrying in 5 seconds...", flush=True)
+                time.sleep(5)
+                continue
+
         payload = json.dumps({
             "state": STATE,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -84,6 +107,8 @@ try:
         client.publish(TOPIC, payload, qos=1)
         print(payload, flush=True)
         time.sleep(5)
+except KeyboardInterrupt:
+    print("Exiting...", flush=True)
 finally:
-    client.loop_stop(); client.disconnect()
-
+    client.loop_stop()
+    client.disconnect()
